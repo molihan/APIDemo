@@ -5,6 +5,7 @@ import java.awt.Graphics2D;
 import java.awt.event.ActionEvent;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -16,6 +17,7 @@ import java.nio.ByteBuffer;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashSet;
@@ -48,13 +50,17 @@ import com.sio.util.TemplateFactory;
 import com.sio.view.GUIWindow;
 
 public class GUIWindowControl {
-	public final static SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
-	public final static Pattern pattern = Pattern.compile("[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}");
-	private static final String SEND = "ESLSend";
-	private static final String LED = "ESLLed";
-	private static final String BROADCAST = "ESLBroadcast";
-	private static final String KEY = "ESLKey";
-	private static final String RESET = "ESLReset";
+	public final static SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd,HH:mm:ss");
+	public final static Pattern pattern = Pattern.compile("[0-9]{4}/[0-9]{2}/[0-9]{2},[0-9]{2}:[0-9]{2}:[0-9]{2}");
+	private static final String SEND = "ESLSEND";
+	private static final String LED = "ESLLED";
+	private static final String BROADCAST = "ESLBROADCAST";
+	private static final String KEY = "ESLKEY";
+	private static final String RESET = "ESLRESET";
+	private static final String SPLIT_COMMA = ",";
+	private static final String MAC_RESET_FILENAME = "reset_list.txt";
+	private boolean hasReset = false;
+	private File mac_file;
 //	view
 	private GUIWindow window;
 //	instance
@@ -74,6 +80,7 @@ public class GUIWindowControl {
 			}
 		});
 		new Thread(new APAKeeper()).start();
+		
 	}
 	
 	public void onOpenClickCallBack(ActionEvent e){
@@ -95,7 +102,13 @@ public class GUIWindowControl {
 							
 							@Override
 							public void run() {
-								solveFile(chosen);								
+								hasReset = false;
+								mac_file = new File(chosen.getParentFile(),MAC_RESET_FILENAME);
+								initMacFile();
+								solveFile(chosen);	
+								if(hasReset){
+									printDate();
+								}
 							}
 						}).start();
 					}
@@ -123,18 +136,23 @@ public class GUIWindowControl {
 		
 		if(lines.size()>0){								//	当有数据请求
 			Packer packer = new DefaultUDPA1Pack();		//	初始化包
-			
+
 			for(int x=0; x<lines.size(); x++){			//	读一行 read line
 				String line = lines.get(x);
 				String prev_line = null;
-				
+
 				if(x != 0){								//	不为第一行 		not first line
 					prev_line = lines.get(x-1);			//	则取出上一行	then load the previous line.
 				}
-				
-				String[] args = line.split(" ");		//	参数大于两个 判断防止异常
-				if(args.length > 2){		
+				line = line.toUpperCase().replaceAll("，", ",");
+				lines.set(x, line);
+				String[] args = line.split(SPLIT_COMMA);		//	参数大于两个 判断防止异常
+				for(int i=0; i<args.length; i++){
+					args[i] = args[i].trim();
+				}
+				if(args.length > 2){
 					if(args[0].equalsIgnoreCase(RESET) && args.length == 3){						//	重置命令
+						hasReset = true;
 						solveReset(args[1], args[2]);
 						if(x == lines.size()-1){
 							return;
@@ -147,8 +165,8 @@ public class GUIWindowControl {
 					if(x == 0){							//	若为第一行
 						packer.setHead(mac, new Random().nextLong(), null);		//	初始化头
 					}
-					if(prev_line != null &&  prev_line.split(" ").length > 2){	//	参与上一行处理，有且有MAC
-						String prev_mac = prev_line.split(" ")[1];
+					if(prev_line != null &&  prev_line.split(SPLIT_COMMA).length > 2){	//	参与上一行处理，有且有MAC
+						String prev_mac = prev_line.split(SPLIT_COMMA)[1].trim();
 						if(mac.equalsIgnoreCase(prev_mac)){						//	上一行相同
 							
 						} else {												//	上一行不同
@@ -183,7 +201,7 @@ public class GUIWindowControl {
 						if(args.length == 5){
 							String ymd = args[3];
 							String hms = args[4];
-							String ymd_hms = ymd + " " + hms;
+							String ymd_hms = ymd + SPLIT_COMMA + hms;
 							Matcher matcher = pattern.matcher(ymd_hms);
 							if(matcher.matches()){
 								try {
@@ -255,6 +273,7 @@ public class GUIWindowControl {
 							packer.setHead(wTag.getMac(), new Random().nextLong(), null);
 							packer.setData(DefaultUDPA1Pack.ORDER_SEND_BW,caster.cast(image, tag.model()));
 							wTag.write(packer.getPack());
+							writeMacFile(wTag.getMac());
 						}
 					}
 				}
@@ -311,5 +330,49 @@ public class GUIWindowControl {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
+	}
+	
+	private void initMacFile(){
+		if(mac_file.exists()){
+			mac_file.delete();
+			try {
+				mac_file.createNewFile();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		} else {
+			try {
+				mac_file.createNewFile();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	private void writeMacFile(String mac){
+		try(
+				FileWriter fw = new FileWriter(mac_file,true);
+				BufferedWriter out = new BufferedWriter(fw);
+			){
+				out.write(mac);
+				out.flush();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		
+	}
+	
+	private void printDate(){
+		try(
+				FileWriter fw = new FileWriter(mac_file,true);
+				BufferedWriter out = new BufferedWriter(fw);
+			){
+				Calendar calendar = Calendar.getInstance();
+				calendar.setTime(new Date());
+				out.write(calendar.toString());
+				out.flush();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
 	}
 }
